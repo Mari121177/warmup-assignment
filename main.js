@@ -24,12 +24,15 @@ function formatTime(totalSeconds) {
 // Function 1: getShiftDuration(startTime, endTime)
 // startTime: (typeof string) formatted as hh:mm:ss am or hh:mm:ss pm
 // endTime: (typeof string) formatted as hh:mm:ss am or hh:mm:ss pm
-// Returns: string formatted as h:mm:ss
+// Returns: string formatted as h:mm:ss 
 // ============================================================
 function getShiftDuration(startTime, endTime) {
     const start = parseTimeAmPm(startTime);
     const end = parseTimeAmPm(endTime);
-    const diff = end - start;
+    let diff = end - start;
+    if (diff < 0) {
+        diff += 24 * 3600;
+    }
     return formatTime(diff);
 }
 
@@ -40,7 +43,28 @@ function getShiftDuration(startTime, endTime) {
 // Returns: string formatted as h:mm:ss
 // ============================================================
 function getIdleTime(startTime, endTime) {
-    // TODO: Implement this function
+    const start = parseTimeAmPm(startTime);
+    const end = parseTimeAmPm(endTime);
+    
+    const deliveryStart = 8 * 3600;
+    const deliveryEnd = 22 * 3600;
+
+    let idle = 0;
+
+    if (start < deliveryStart) {
+        idle += Math.min(end, deliveryStart) - start;
+    }
+
+    if (end > deliveryEnd) {
+        idle += end - Math.max(start, deliveryEnd);
+    }
+
+    return formatTime(idle);
+}
+
+function parseTime(timeStr) {
+    const [h, m, s] = timeStr.trim().split(':').map(Number);
+    return h * 3600 + m * 60 + s;
 }
 
 // ============================================================
@@ -50,7 +74,17 @@ function getIdleTime(startTime, endTime) {
 // Returns: string formatted as h:mm:ss
 // ============================================================
 function getActiveTime(shiftDuration, idleTime) {
-    // TODO: Implement this function
+    const shiftDur = parseTime(shiftDuration);
+    const idle = parseTime(idleTime);
+
+    let difference = shiftDur - idle;
+    
+    if (difference < 0) {
+        difference = 0;
+    }
+
+    return formatTime(difference);
+
 }
 
 // ============================================================
@@ -60,7 +94,22 @@ function getActiveTime(shiftDuration, idleTime) {
 // Returns: boolean
 // ============================================================
 function metQuota(date, activeTime) {
-    // TODO: Implement this function
+    const parts = date.split('-');
+    const year = parseInt(parts[0]);
+    const month = parseInt(parts[1]);
+    const day = parseInt(parts[2]);
+
+    let quota;
+
+    if (year === 2025 && month === 4 && day >= 10 && day <= 30) {
+        quota = 6 * 3600;
+    } else {
+        quota = 8 * 3600 + 24 * 60;
+    }
+
+    const active = parseTime(activeTime);
+
+    return active >= quota;
 }
 
 // ============================================================
@@ -70,7 +119,66 @@ function metQuota(date, activeTime) {
 // Returns: object with 10 properties or empty object {}
 // ============================================================
 function addShiftRecord(textFile, shiftObj) {
-    // TODO: Implement this function
+    const { driverID, driverName, date, startTime, endTime } = shiftObj;
+
+    const content = fs.readFileSync(textFile, { encoding: 'utf8' });
+    const lines = content.split('\n');
+
+    // Step 1: Check for duplicate
+    for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const parts = lines[i].split(',');
+        if (parts[0].trim() === driverID && parts[2].trim() === date) {
+            return {};
+        }
+    }
+
+    // Step 2: Calculate all derived fields
+    const shiftDuration = getShiftDuration(startTime, endTime);
+    const idleTime = getIdleTime(startTime, endTime);
+    const activeTime = getActiveTime(shiftDuration, idleTime);
+    const quota = metQuota(date, activeTime);
+
+    // Step 3: Build the new record object
+    const newRecord = {
+        driverID,
+        driverName,
+        date,
+        startTime,
+        endTime,
+        shiftDuration,
+        idleTime,
+        activeTime,
+        metQuota: quota,
+        hasBonus: false
+    };
+
+    // Step 4: Build the new line to write to file
+    const newLine = `${driverID},${driverName},${date},${startTime},${endTime},${shiftDuration},${idleTime},${activeTime},${quota},false`;
+
+    // Step 5: Find where to insert
+    let lastIndexOfDriver = -1;
+    for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const parts = lines[i].split(',');
+        if (parts[0].trim() === driverID) {
+            lastIndexOfDriver = i;
+        }
+    }
+
+    // Step 6: Insert into correct position
+    if (lastIndexOfDriver === -1) {
+        // driverID not found, append at end
+        lines.push(newLine);
+    } else {
+        // insert after last record of this driverID
+        lines.splice(lastIndexOfDriver + 1, 0, newLine);
+    }
+
+    // Step 7: Write back to file
+    fs.writeFileSync(textFile, lines.join('\n'), { encoding: 'utf8' });
+
+    return newRecord;
 }
 
 // ============================================================
