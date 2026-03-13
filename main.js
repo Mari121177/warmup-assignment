@@ -58,10 +58,13 @@ function getShiftDuration(startTime, endTime) {
 // ============================================================
 function getIdleTime(startTime, endTime) {
     const start = parseTimeAmPm(startTime);
-    const end = parseTimeAmPm(endTime);
+    let end = parseTimeAmPm(endTime);
     
     const deliveryStart = 8 * 3600;
     const deliveryEnd = 22 * 3600;
+
+    // Handle midnight crossing
+    if (end < start) end += 24 * 3600;
 
     let idle = 0;
 
@@ -208,10 +211,11 @@ function setBonus(textFile, driverID, date, newValue) {
         if (!lines[i].trim()) continue;
         const parts = lines[i].split(',');
         if (parts[0].trim() === driverID && parts[2].trim() === date) {
-            parts[parts.length - 1] = String(newValue);
-            lines[i] = parts.join(',');
-            break;
-        }
+        const hasCarriageReturn = parts[parts.length - 1].includes('\r');
+        parts[parts.length - 1] = String(newValue) + (hasCarriageReturn ? '\r' : '');
+        lines[i] = parts.join(',');
+        break;
+        } 
     }
 
     fs.writeFileSync(textFile, lines.join('\n'), { encoding: 'utf8' });
@@ -292,15 +296,12 @@ function getTotalActiveHoursPerMonth(textFile, driverID, month) {
 // Returns: string formatted as hhh:mm:ss
 // ============================================================
 function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, month) {
-    // Step 1: Read shifts file
     const content = fs.readFileSync(textFile, { encoding: 'utf8' });
     const lines = content.split('\n');
 
-    // Step 2: Read rateFile to get driver's day off
     const rateContent = fs.readFileSync(rateFile, { encoding: 'utf8' });
     const rateLines = rateContent.split('\n');
 
-    // Step 3: Find driver's day off from rateFile
     let dayOff = null;
     for (let i = 0; i < rateLines.length; i++) {
         if (!rateLines[i].trim()) continue;
@@ -311,14 +312,12 @@ function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, mont
         }
     }
 
-    // Step 4: Map day name to day number
     const dayMap = {
         'sunday': 0, 'monday': 1, 'tuesday': 2,
         'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6
     };
     const dayOffNumber = dayMap[dayOff];
 
-    // Step 5: Loop through shifts and add quota
     let totalSeconds = 0;
     for (let i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
@@ -328,16 +327,13 @@ function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, mont
         const recordMonth = parseInt(parts[2].trim().split('-')[1]);
         if (recordMonth !== parseInt(month)) continue;
 
-        // Check if this date is driver's day off
         const dateStr = parts[2].trim();
-        const dateObj = new Date(dateStr);
-        if (dateObj.getDay() === dayOffNumber) continue;
+        const dateObj = new Date(dateStr + 'T00:00:00Z');
+        if (dateObj.getUTCDay() === dayOffNumber) continue;
 
-        // Add quota for this date
         totalSeconds += getQuotaForDate(dateStr);
     }
 
-    // Step 6: Subtract 2 hours per bonus
     totalSeconds -= bonusCount * 2 * 3600;
     if (totalSeconds < 0) totalSeconds = 0;
 
