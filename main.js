@@ -1,14 +1,21 @@
 const fs = require("fs");
 
+// HELPER FUNCTIONS 
+
+// Reads a CSV file, removes \r, splits by \n, filters empty lines
+function readCSV(filePath) {
+    return fs.readFileSync(filePath, 'utf8').replace(/\r/g, '').split('\n').filter(line => line.trim() !== '');
+}
+
 function parseTimeAmPm(timeStr) {
     const parts = timeStr.trim().toLowerCase().split(' ');
     const [h, m, s] = parts[0].split(':').map(Number);
     const period = parts[1];
     let hours = h;
     if (period === 'am') {
-        if (hours === 12) hours = 0;       // 12:xx am → 0:xx (midnight)
+        if (hours === 12) hours = 0;
     } else {
-        if (hours !== 12) hours += 12;     // 1–11 pm → 13–23
+        if (hours !== 12) hours += 12;
     }
     return hours * 3600 + m * 60 + s;
 }
@@ -19,26 +26,40 @@ function formatTime(totalSeconds) {
     const s = Math.floor(totalSeconds % 60);
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
+
 function getQuotaForDate(dateStr) {
     const parts = dateStr.split('-');
     const year = parseInt(parts[0]);
     const month = parseInt(parts[1]);
     const day = parseInt(parts[2]);
-
     if (year === 2025 && month === 4 && day >= 10 && day <= 30) {
         return 6 * 3600;
     }
     return 8 * 3600 + 24 * 60;
 }
+
 function parseTime(timeStr) {
     const [h, m, s] = timeStr.trim().split(':').map(Number);
     return h * 3600 + m * 60 + s;
 }
+
+// Manual day of week calculation - avoids JS Date timezone issues entirely
+// Returns 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday
+function getDayOfWeek(dateStr) {
+    const parts = dateStr.split('-');
+    const year = parseInt(parts[0]);
+    const month = parseInt(parts[1]);
+    const day = parseInt(parts[2]);
+    const t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    const y = month < 3 ? year - 1 : year;
+    return (y + Math.floor(y / 4) - Math.floor(y / 100) + Math.floor(y / 400) + t[month - 1] + day) % 7;
+}
+
 // ============================================================
 // Function 1: getShiftDuration(startTime, endTime)
 // startTime: (typeof string) formatted as hh:mm:ss am or hh:mm:ss pm
 // endTime: (typeof string) formatted as hh:mm:ss am or hh:mm:ss pm
-// Returns: string formatted as h:mm:ss 
+// Returns: string formatted as h:mm:ss
 // ============================================================
 function getShiftDuration(startTime, endTime) {
     const start = parseTimeAmPm(startTime);
@@ -59,7 +80,7 @@ function getShiftDuration(startTime, endTime) {
 function getIdleTime(startTime, endTime) {
     const start = parseTimeAmPm(startTime);
     let end = parseTimeAmPm(endTime);
-    
+
     const deliveryStart = 8 * 3600;
     const deliveryEnd = 22 * 3600;
 
@@ -68,18 +89,18 @@ function getIdleTime(startTime, endTime) {
 
     let idle = 0;
 
+    // Case 1: shift starts before 8AM
     if (start < deliveryStart) {
         idle += Math.min(end, deliveryStart) - start;
     }
 
+    // Case 2: shift ends after 10PM
     if (end > deliveryEnd) {
         idle += end - Math.max(start, deliveryEnd);
     }
 
     return formatTime(idle);
 }
-
-
 
 // ============================================================
 // Function 3: getActiveTime(shiftDuration, idleTime)
@@ -90,15 +111,11 @@ function getIdleTime(startTime, endTime) {
 function getActiveTime(shiftDuration, idleTime) {
     const shiftDur = parseTime(shiftDuration);
     const idle = parseTime(idleTime);
-
     let difference = shiftDur - idle;
-    
     if (difference < 0) {
         difference = 0;
     }
-
     return formatTime(difference);
-
 }
 
 // ============================================================
@@ -108,21 +125,8 @@ function getActiveTime(shiftDuration, idleTime) {
 // Returns: boolean
 // ============================================================
 function metQuota(date, activeTime) {
-    const parts = date.split('-');
-    const year = parseInt(parts[0]);
-    const month = parseInt(parts[1]);
-    const day = parseInt(parts[2]);
-
-    let quota;
-
-    if (year === 2025 && month === 4 && day >= 10 && day <= 30) {
-        quota = 6 * 3600;
-    } else {
-        quota = 8 * 3600 + 24 * 60;
-    }
-
+    const quota = getQuotaForDate(date);
     const active = parseTime(activeTime);
-
     return active >= quota;
 }
 
@@ -136,7 +140,7 @@ function addShiftRecord(textFile, shiftObj) {
     const { driverID, driverName, date, startTime, endTime } = shiftObj;
 
     const content = fs.readFileSync(textFile, { encoding: 'utf8' });
-    const lines = content.split('\n');
+    const lines = content.replace(/\r/g, '').split('\n');
 
     // Step 1: Check for duplicate
     for (let i = 1; i < lines.length; i++) {
@@ -182,15 +186,14 @@ function addShiftRecord(textFile, shiftObj) {
 
     // Step 6: Insert into correct position
     if (lastIndexOfDriver === -1) {
-        // driverID not found, append at end
         lines.push(newLine);
     } else {
-        // insert after last record of this driverID
         lines.splice(lastIndexOfDriver + 1, 0, newLine);
     }
 
-    // Step 7: Write back to file
-    fs.writeFileSync(textFile, lines.join('\n'), { encoding: 'utf8' });
+    // Step 7: Filter empty lines and write back
+    const filtered = lines.filter(l => l.trim() !== '');
+    fs.writeFileSync(textFile, filtered.join('\n') + '\n', { encoding: 'utf8' });
 
     return newRecord;
 }
@@ -205,20 +208,20 @@ function addShiftRecord(textFile, shiftObj) {
 // ============================================================
 function setBonus(textFile, driverID, date, newValue) {
     const content = fs.readFileSync(textFile, { encoding: 'utf8' });
-    const lines = content.split('\n');
+    const lines = content.replace(/\r/g, '').split('\n');
 
     for (let i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
         const parts = lines[i].split(',');
         if (parts[0].trim() === driverID && parts[2].trim() === date) {
-        const hasCarriageReturn = parts[parts.length - 1].includes('\r');
-        parts[parts.length - 1] = String(newValue) + (hasCarriageReturn ? '\r' : '');
-        lines[i] = parts.join(',');
-        break;
-        } 
+            parts[parts.length - 1] = String(newValue);
+            lines[i] = parts.join(',');
+            break;
+        }
     }
 
-    fs.writeFileSync(textFile, lines.join('\n'), { encoding: 'utf8' });
+    const filtered = lines.filter(l => l.trim() !== '');
+    fs.writeFileSync(textFile, filtered.join('\n') + '\n', { encoding: 'utf8' });
 }
 
 // ============================================================
@@ -229,10 +232,7 @@ function setBonus(textFile, driverID, date, newValue) {
 // Returns: number (-1 if driverID not found)
 // ============================================================
 function countBonusPerMonth(textFile, driverID, month) {
-    const content = fs.readFileSync(textFile, { encoding: 'utf8' });
-    const lines = content.split('\n');
-
-    // Normalize month to integer for comparison
+    const lines = readCSV(textFile);
     const targetMonth = parseInt(month);
 
     let driverFound = false;
@@ -243,14 +243,11 @@ function countBonusPerMonth(textFile, driverID, month) {
         const parts = lines[i].split(',');
         if (parts[0].trim() !== driverID) continue;
 
-        // Driver exists
         driverFound = true;
 
-        // Check if same month
         const recordMonth = parseInt(parts[2].trim().split('-')[1]);
         if (recordMonth !== targetMonth) continue;
 
-        // Check if hasBonus is true
         if (parts[parts.length - 1].trim() === 'true') {
             count++;
         }
@@ -267,9 +264,7 @@ function countBonusPerMonth(textFile, driverID, month) {
 // Returns: string formatted as hhh:mm:ss
 // ============================================================
 function getTotalActiveHoursPerMonth(textFile, driverID, month) {
-   const content = fs.readFileSync(textFile, { encoding: 'utf8' });
-    const lines = content.split('\n');
-
+    const lines = readCSV(textFile);
     let totalSeconds = 0;
 
     for (let i = 1; i < lines.length; i++) {
@@ -296,12 +291,10 @@ function getTotalActiveHoursPerMonth(textFile, driverID, month) {
 // Returns: string formatted as hhh:mm:ss
 // ============================================================
 function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, month) {
-    const content = fs.readFileSync(textFile, { encoding: 'utf8' });
-    const lines = content.split('\n');
+    const lines = readCSV(textFile);
+    const rateLines = readCSV(rateFile);
 
-    const rateContent = fs.readFileSync(rateFile, { encoding: 'utf8' });
-    const rateLines = rateContent.split('\n');
-
+    // Find driver's day off
     let dayOff = null;
     for (let i = 0; i < rateLines.length; i++) {
         if (!rateLines[i].trim()) continue;
@@ -311,6 +304,7 @@ function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, mont
             break;
         }
     }
+    if (dayOff === null) return "0:00:00";
 
     const dayMap = {
         'sunday': 0, 'monday': 1, 'tuesday': 2,
@@ -328,8 +322,9 @@ function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, mont
         if (recordMonth !== parseInt(month)) continue;
 
         const dateStr = parts[2].trim();
-        const dateObj = new Date(dateStr + 'T00:00:00Z');
-        if (dateObj.getUTCDay() === dayOffNumber) continue;
+
+        // Use manual day calculation to avoid timezone issues
+        if (getDayOfWeek(dateStr) === dayOffNumber) continue;
 
         totalSeconds += getQuotaForDate(dateStr);
     }
@@ -349,8 +344,7 @@ function getRequiredHoursPerMonth(textFile, rateFile, bonusCount, driverID, mont
 // Returns: integer (net pay)
 // ============================================================
 function getNetPay(driverID, actualHours, requiredHours, rateFile) {
-    const rateContent = fs.readFileSync(rateFile, { encoding: 'utf8' });
-    const rateLines = rateContent.split('\n');
+    const rateLines = readCSV(rateFile);
 
     let basePay = 0;
     let tier = 0;
